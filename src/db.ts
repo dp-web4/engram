@@ -73,7 +73,7 @@ CREATE TRIGGER IF NOT EXISTS obs_ad AFTER DELETE ON observations BEGIN
   VALUES ('delete', old.id, old.input_summary, old.output_summary, old.tags);
 END;
 
--- Tier 2: Consolidated patterns
+-- Tier 2: Consolidated patterns (INFERRED — not raw observations)
 CREATE TABLE IF NOT EXISTS patterns (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS patterns (
   detail      TEXT,
   frequency   INTEGER DEFAULT 1,
   source_ids  TEXT,
-  confidence  REAL DEFAULT 0.5
+  confidence  REAL DEFAULT 0.5,
+  last_seen   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS patterns_fts USING fts5(
@@ -235,6 +236,26 @@ export function prepareStatements(db: Database.Database) {
       UPDATE sessions SET ended_at = datetime('now'),
         obs_count = (SELECT COUNT(*) FROM observations WHERE session_id = ?)
       WHERE session_id = ?
+    `),
+
+    // Confidence decay: reduce confidence of patterns not seen recently
+    // Called during dream cycle. Decay rate: 0.05 per day since last_seen.
+    decayPatterns: db.prepare(`
+      UPDATE patterns SET
+        confidence = MAX(0.0, confidence - 0.05 * (julianday('now') - julianday(last_seen)))
+      WHERE julianday('now') - julianday(last_seen) > 1.0
+    `),
+
+    // Prune patterns that have decayed below usefulness
+    prunePatterns: db.prepare(`
+      DELETE FROM patterns WHERE confidence < 0.1
+    `),
+
+    // Decay old observations — reduce salience of observations older than 7 days
+    decayObservations: db.prepare(`
+      UPDATE observations SET
+        salience = MAX(0.0, salience - 0.02 * (julianday('now') - julianday(ts) - 7))
+      WHERE julianday('now') - julianday(ts) > 7
     `),
 
     getStats: db.prepare(`

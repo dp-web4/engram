@@ -25,8 +25,15 @@ export function consolidate(
   stmts: Statements,
   sessionObs: Observation[],
   sessionId: string,
-): { patternsCreated: number } {
-  if (sessionObs.length < 3) return { patternsCreated: 0 };
+): { patternsCreated: number; patternsDecayed: number; patternsPruned: number } {
+  // Always run decay/prune, even if no observations this session
+  stmts.decayPatterns.run();
+  stmts.decayObservations.run();
+  const pruneResult = stmts.prunePatterns.run();
+  const patternsPruned = pruneResult.changes;
+  const patternsDecayed = stmts.decayPatterns.run().changes;
+
+  if (sessionObs.length < 3) return { patternsCreated: 0, patternsDecayed, patternsPruned };
 
   let created = 0;
 
@@ -39,7 +46,7 @@ export function consolidate(
   // 3. Concept clusters
   created += extractConceptClusters(stmts, sessionObs);
 
-  return { patternsCreated: created };
+  return { patternsCreated: created, patternsDecayed, patternsPruned };
 }
 
 /**

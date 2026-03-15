@@ -21,8 +21,12 @@ async function main() {
     const result = memory.endSession();
     memory.close();
 
-    if (result.patternsCreated > 0) {
-      process.stderr.write(`[engram] Dream cycle: ${result.patternsCreated} patterns consolidated\n`);
+    const parts = [];
+    if (result.patternsCreated > 0) parts.push(`${result.patternsCreated} created`);
+    if (result.patternsDecayed > 0) parts.push(`${result.patternsDecayed} decayed`);
+    if (result.patternsPruned > 0) parts.push(`${result.patternsPruned} pruned`);
+    if (parts.length > 0) {
+      process.stderr.write(`[engram] Dream cycle: ${parts.join(', ')}\n`);
     }
   } catch (e) {
     // Silent failure

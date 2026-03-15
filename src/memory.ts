@@ -98,7 +98,7 @@ export class EngramMemory {
     return { salience: scores.salience, stored, scores };
   }
 
-  endSession(): { patternsCreated: number } {
+  endSession(): { patternsCreated: number; patternsDecayed: number; patternsPruned: number } {
     // Run consolidation on this session's observations
     const sessionObs = this.stmts.getSessionObservations.all(this.sessionId) as any[];
     const result = consolidate(this.db, this.stmts, sessionObs, this.sessionId);
@@ -183,41 +183,52 @@ export class EngramMemory {
     };
   }
 
-  /** Get a session briefing — recent patterns and high-salience observations for a cwd */
+  /**
+   * Get a session briefing — conservative, epistemically labeled.
+   *
+   * Observations are "observed" (raw tool results, attributed).
+   * Patterns are "inferred" (heuristic extraction, may be wrong).
+   * Identity facts carry confidence scores.
+   *
+   * Injection is biased toward omission: only high-confidence patterns
+   * and high-salience observations are surfaced. Wrong memory is more
+   * damaging than missing memory.
+   */
   getSessionBriefing(cwd?: string, maxTokens = 500): string {
     const lines: string[] = [];
 
-    // Recent patterns (Tier 2) — most valuable context
-    const patterns = this.getPatterns();
+    // Tier 2 patterns — INFERRED, only high-confidence (>= 0.6)
+    const patterns = this.getPatterns()
+      .filter((p: any) => p.confidence >= 0.6);
     if (patterns.length > 0) {
-      lines.push('Recurring patterns from past sessions:');
-      for (const p of patterns.slice(0, 5)) {
-        lines.push(`  - [${p.kind}] ${p.summary}`);
+      lines.push('Inferred patterns (heuristic — may not be accurate):');
+      for (const p of patterns.slice(0, 3)) {
+        lines.push(`  - [${p.kind}] ${p.summary} (confidence: ${p.confidence.toFixed(2)})`);
       }
     }
 
-    // Recent high-salience observations (Tier 1) — last 5 sessions
-    const recent = this.stmts.getRecentObservations.all(15) as any[];
-    const highSalience = recent.filter((o: any) => o.salience >= 0.5);
+    // Tier 1 observations — OBSERVED, only high-salience (>= 0.6)
+    const recent = this.stmts.getRecentObservations.all(10) as any[];
+    const highSalience = recent.filter((o: any) => o.salience >= 0.6);
     if (highSalience.length > 0) {
-      lines.push('Recent high-salience observations:');
-      for (const o of highSalience.slice(0, 5)) {
-        lines.push(`  - [${o.tool_name}] ${o.input_summary.slice(0, 100)} (salience: ${o.salience.toFixed(2)})`);
+      lines.push('Recent observations (directly recorded):');
+      for (const o of highSalience.slice(0, 3)) {
+        lines.push(`  - [${o.tool_name}] ${o.input_summary.slice(0, 100)} (${o.ts})`);
       }
     }
 
-    // Identity facts (Tier 3)
-    const identity = this.getIdentity();
+    // Tier 3 identity — only high-confidence (>= 0.7)
+    const identity = this.getIdentity()
+      .filter((i: any) => i.confidence >= 0.7);
     if (identity.length > 0) {
-      lines.push('Known project facts:');
-      for (const i of identity.slice(0, 5)) {
+      lines.push('Project facts (auto-extracted, verify if unsure):');
+      for (const i of identity.slice(0, 3)) {
         lines.push(`  - ${i.key}: ${i.value}`);
       }
     }
 
     if (lines.length === 0) return '';
 
-    // Rough token estimate: ~1 token per 4 chars
     const full = lines.join('\n');
     if (full.length > maxTokens * 4) {
       return full.slice(0, maxTokens * 4) + '\n  ...';
@@ -225,14 +236,24 @@ export class EngramMemory {
     return full;
   }
 
-  /** Find observations related to a query, for reactive injection */
-  findRelated(query: string, limit = 5): string {
-    const results = this.search(query, limit);
+  /**
+   * Find observations related to a query, for reactive injection.
+   * Conservative: only surfaces results with salience >= 0.5 (Tier 1)
+   * or confidence >= 0.6 (Tier 2). Labels provenance explicitly.
+   */
+  findRelated(query: string, limit = 3): string {
+    const results = this.search(query, limit * 2) // overfetch, then filter
+      .filter(r =>
+        (r.tier === 1 && (r.salience || 0) >= 0.5) ||
+        (r.tier === 2)
+      )
+      .slice(0, limit);
     if (results.length === 0) return '';
 
-    const lines = ['Related engram memories:'];
+    const lines = ['Related engram memories (verify before relying on these):'];
     for (const r of results) {
-      lines.push(`  - [Tier ${r.tier}${r.kind ? ` ${r.kind}` : ''}] ${r.summary}`);
+      const provenance = r.tier === 1 ? 'observed' : 'inferred';
+      lines.push(`  - [${provenance}${r.kind ? ` ${r.kind}` : ''}] ${r.summary}`);
     }
     return lines.join('\n');
   }
