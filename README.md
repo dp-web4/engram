@@ -113,6 +113,11 @@ PostToolUse hook (every tool invocation)
   ├─→ salience >= 0.3? → INSERT Tier 1 (SQLite)
   └─→ stdout: {"continue": true, "suppressOutput": true}
 
+PostCompact hook (after context compaction)
+  │
+  └─→ Re-inject session briefing (patterns, observations, identity)
+      so Claude doesn't lose awareness after compaction
+
 Stop hook (dream cycle)
   │
   ├─→ Tool sequence extraction → Tier 2
