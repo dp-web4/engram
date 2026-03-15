@@ -80,7 +80,7 @@ async function main() {
         const obs = memory.getContext(undefined, undefined, 50);
         const stmts = (memory as any).stmts; // access internals for deep consolidation
         const result = await deepConsolidate(stmts, obs);
-        console.log(`Deep dream complete: ${result.patternsCreated} patterns, ${result.identityFacts} identity facts`);
+        console.log(`Deep dream complete: ${result.patternsCreated} patterns, ${result.proposedIdentity} proposed identity (quarantined)`);
       } else {
         memory.initSession(sessionId);
         const result = memory.endSession();

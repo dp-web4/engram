@@ -3,16 +3,22 @@
  *
  * Sends session observations to Claude (via `claude --print`) for
  * semantic pattern extraction. Produces higher-quality Tier 2 patterns
- * and Tier 3 identity facts than the heuristic extractors.
+ * than the heuristic extractors.
+ *
+ * IMPORTANT: Deep dream output is INFERRED, not observed. All results
+ * stay in Tier 2 as "deep_*" patterns — never auto-promoted to Tier 3.
+ * Identity facts from deep dream are quarantined as "proposed_identity"
+ * patterns until confirmed by a human or corroborated across sessions.
  *
  * Usage:
  *   engram dream --deep           # CLI
  *   ENGRAM_DEEP_DREAM=1 on Stop   # automatic (if env var set)
- *
- * Uses existing Claude Code auth — no API key needed.
  */
 
 import { execSync } from 'node:child_process';
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Statements } from './db.js';
 
 interface Observation {
@@ -32,6 +38,8 @@ interface DeepPattern {
   source_ids: number[];
 }
 
+const VALID_KINDS = new Set(['workflow', 'error_fix', 'insight', 'decision', 'identity']);
+
 const PROMPT_TEMPLATE = `You are a memory consolidation agent. You are reviewing observations from a coding session and extracting durable patterns.
 
 Below are the session's observations — tool uses that scored above salience threshold. Each has a tool name, input summary, output summary, salience score, and timestamp.
@@ -48,9 +56,10 @@ Respond with a JSON array of patterns. Each pattern has:
 Rules:
 - Only extract patterns you're confident about (>= 0.5)
 - Prefer fewer high-quality patterns over many weak ones
-- "identity" patterns become permanent project facts — be very conservative (>= 0.8 confidence)
+- "identity" patterns should be very conservative (>= 0.8 confidence) — they will be quarantined for review, not auto-applied
 - Do NOT include session-specific details (timestamps, exact commands) — extract the reusable knowledge
 - Do NOT hallucinate patterns not supported by the observations
+- source_ids MUST reference actual observation IDs from the list below
 - If the observations don't contain meaningful patterns, return an empty array []
 
 OBSERVATIONS:
@@ -59,10 +68,13 @@ OBSERVATIONS:
 export async function deepConsolidate(
   stmts: Statements,
   observations: Observation[],
-): Promise<{ patternsCreated: number; identityFacts: number }> {
+): Promise<{ patternsCreated: number; proposedIdentity: number }> {
   if (observations.length < 3) {
-    return { patternsCreated: 0, identityFacts: 0 };
+    return { patternsCreated: 0, proposedIdentity: 0 };
   }
+
+  // Build valid observation ID set for verification
+  const validIds = new Set(observations.map(o => o.id));
 
   // Format observations for the prompt
   const obsText = observations.map(o =>
@@ -71,77 +83,84 @@ export async function deepConsolidate(
 
   const prompt = PROMPT_TEMPLATE + obsText + '\n\nRespond with ONLY a JSON array. No markdown, no explanation.';
 
-  // Call claude --print
+  // Write prompt to temp file and pass via stdin — avoids shell escaping issues
+  const tmpFile = join(tmpdir(), `engram-dream-${Date.now()}.txt`);
   let response: string;
   try {
+    writeFileSync(tmpFile, prompt);
     response = execSync(
-      `claude --print "${escapeBash(prompt)}"`,
+      `cat "${tmpFile}" | claude --print -`,
       {
-        timeout: 60_000, // 60 second timeout
+        timeout: 60_000,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     ).trim();
   } catch (e: any) {
-    // claude CLI not available or timed out
     console.error(`[engram] Deep consolidation failed: ${e.message?.slice(0, 100)}`);
-    return { patternsCreated: 0, identityFacts: 0 };
+    return { patternsCreated: 0, proposedIdentity: 0 };
+  } finally {
+    try { unlinkSync(tmpFile); } catch { /* cleanup */ }
   }
 
   // Parse response — extract JSON array
   let patterns: DeepPattern[];
   try {
-    // Handle markdown code blocks if Claude wraps the response
     const jsonMatch = response.match(/\[[\s\S]*\]/);
     if (!jsonMatch) {
       console.error('[engram] Deep consolidation: no JSON array in response');
-      return { patternsCreated: 0, identityFacts: 0 };
+      return { patternsCreated: 0, proposedIdentity: 0 };
     }
     patterns = JSON.parse(jsonMatch[0]);
     if (!Array.isArray(patterns)) throw new Error('not an array');
   } catch (e) {
     console.error(`[engram] Deep consolidation: failed to parse response`);
-    return { patternsCreated: 0, identityFacts: 0 };
+    return { patternsCreated: 0, proposedIdentity: 0 };
   }
 
   let patternsCreated = 0;
-  let identityFacts = 0;
+  let proposedIdentity = 0;
 
   for (const p of patterns) {
-    // Validate
+    // Validate required fields
     if (!p.kind || !p.summary || p.confidence === undefined) continue;
-    if (p.confidence < 0.5) continue; // skip low confidence
+    if (p.confidence < 0.5) continue;
 
-    if (p.kind === 'identity' && p.confidence >= 0.8) {
-      // Promote to Tier 3
-      stmts.upsertIdentity.run(
-        p.summary.split(':')[0]?.trim() || p.summary,
-        p.detail || p.summary,
-        'deep-dream',
+    // Validate kind is one of the expected values
+    if (!VALID_KINDS.has(p.kind)) continue;
+
+    // Validate source_ids reference real observations
+    const validSourceIds = (p.source_ids || []).filter(id => validIds.has(id));
+    if (validSourceIds.length === 0 && observations.length > 0) {
+      // LLM fabricated source IDs — still store pattern but lower confidence
+      p.confidence = Math.max(0.5, p.confidence - 0.2);
+    }
+
+    if (p.kind === 'identity') {
+      // QUARANTINE: identity facts from deep dream go to Tier 2 as
+      // "proposed_identity" — NOT auto-promoted to Tier 3.
+      // They need human confirmation or cross-session corroboration.
+      stmts.insertPattern.run(
+        'proposed_identity',
+        `[proposed] ${p.summary}`,
+        p.detail || '',
+        1,
+        JSON.stringify(validSourceIds),
         p.confidence,
       );
-      identityFacts++;
+      proposedIdentity++;
     } else {
-      // Tier 2 pattern
       stmts.insertPattern.run(
         `deep_${p.kind}`,
         p.summary,
         p.detail || '',
         1,
-        JSON.stringify(p.source_ids || []),
+        JSON.stringify(validSourceIds),
         p.confidence,
       );
       patternsCreated++;
     }
   }
 
-  return { patternsCreated, identityFacts };
-}
-
-/** Escape string for bash double-quoted context */
-function escapeBash(s: string): string {
-  return s.replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, '\\$')
-    .replace(/`/g, '\\`');
+  return { patternsCreated, proposedIdentity };
 }

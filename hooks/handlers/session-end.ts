@@ -35,7 +35,7 @@ async function main() {
         const stmts = (memory as any).stmts;
         const deep = await deepConsolidate(stmts, obs);
         if (deep.patternsCreated > 0) parts.push(`${deep.patternsCreated} deep patterns`);
-        if (deep.identityFacts > 0) parts.push(`${deep.identityFacts} identity facts`);
+        if (deep.proposedIdentity > 0) parts.push(`${deep.proposedIdentity} proposed identity (quarantined)`);
       }
     }
 
