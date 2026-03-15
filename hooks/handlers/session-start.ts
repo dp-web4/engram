@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * SessionStart hook — initialize engram for this session.
+ * SessionStart hook — initialize engram and inject relevant context.
+ *
+ * Plain text to stdout goes directly into Claude's context.
+ * This is how engram surfaces past observations without being asked.
  */
 
 import { EngramMemory } from '../../src/memory.js';
@@ -12,10 +15,16 @@ const cwd = process.cwd();
 try {
   const memory = new EngramMemory();
   memory.initSession(sessionId, cwd);
+
+  // Generate session briefing from past memories
+  const briefing = memory.getSessionBriefing(cwd);
+
   memory.close();
+
+  // Inject into Claude's context (plain text to stdout on SessionStart)
+  if (briefing) {
+    process.stdout.write(`<engram-context>\n${briefing}\n</engram-context>\n`);
+  }
 } catch (e) {
   // Silent failure — engram should never block Claude Code
 }
-
-// Write session ID for subsequent hooks
-process.stdout.write(JSON.stringify({ continue: true, suppressOutput: true }));

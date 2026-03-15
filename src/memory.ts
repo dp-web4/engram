@@ -183,6 +183,60 @@ export class EngramMemory {
     };
   }
 
+  /** Get a session briefing — recent patterns and high-salience observations for a cwd */
+  getSessionBriefing(cwd?: string, maxTokens = 500): string {
+    const lines: string[] = [];
+
+    // Recent patterns (Tier 2) — most valuable context
+    const patterns = this.getPatterns();
+    if (patterns.length > 0) {
+      lines.push('Recurring patterns from past sessions:');
+      for (const p of patterns.slice(0, 5)) {
+        lines.push(`  - [${p.kind}] ${p.summary}`);
+      }
+    }
+
+    // Recent high-salience observations (Tier 1) — last 5 sessions
+    const recent = this.stmts.getRecentObservations.all(15) as any[];
+    const highSalience = recent.filter((o: any) => o.salience >= 0.5);
+    if (highSalience.length > 0) {
+      lines.push('Recent high-salience observations:');
+      for (const o of highSalience.slice(0, 5)) {
+        lines.push(`  - [${o.tool_name}] ${o.input_summary.slice(0, 100)} (salience: ${o.salience.toFixed(2)})`);
+      }
+    }
+
+    // Identity facts (Tier 3)
+    const identity = this.getIdentity();
+    if (identity.length > 0) {
+      lines.push('Known project facts:');
+      for (const i of identity.slice(0, 5)) {
+        lines.push(`  - ${i.key}: ${i.value}`);
+      }
+    }
+
+    if (lines.length === 0) return '';
+
+    // Rough token estimate: ~1 token per 4 chars
+    const full = lines.join('\n');
+    if (full.length > maxTokens * 4) {
+      return full.slice(0, maxTokens * 4) + '\n  ...';
+    }
+    return full;
+  }
+
+  /** Find observations related to a query, for reactive injection */
+  findRelated(query: string, limit = 5): string {
+    const results = this.search(query, limit);
+    if (results.length === 0) return '';
+
+    const lines = ['Related engram memories:'];
+    for (const r of results) {
+      lines.push(`  - [Tier ${r.tier}${r.kind ? ` ${r.kind}` : ''}] ${r.summary}`);
+    }
+    return lines.join('\n');
+  }
+
   close(): void {
     this.db.close();
   }
