@@ -140,6 +140,12 @@ export function openDatabase(path?: string): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+
+  // Migrations for databases created before schema updates
+  try {
+    db.exec(`ALTER TABLE patterns ADD COLUMN last_seen TEXT NOT NULL DEFAULT (datetime('now'))`);
+  } catch { /* column already exists */ }
+
   return db;
 }
 
