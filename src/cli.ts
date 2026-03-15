@@ -13,13 +13,14 @@
 import { EngramMemory } from './memory.js';
 import { exportMarkdown } from './export.js';
 import { getDbPath } from './db.js';
+import { deepConsolidate } from './deep-consolidation.js';
 
 const cmd = process.argv[2];
 const args = process.argv.slice(3);
 
 const memory = new EngramMemory();
 
-try {
+async function main() {
   switch (cmd) {
     case 'stats': {
       const stats = memory.getStats();
@@ -71,10 +72,20 @@ try {
     }
 
     case 'dream': {
-      const sessionId = args[0] || 'manual-dream';
-      memory.initSession(sessionId);
-      const result = memory.endSession();
-      console.log(`Dream cycle complete: ${result.patternsCreated} patterns created`);
+      const deep = args.includes('--deep');
+      const sessionId = args.find(a => !a.startsWith('-')) || 'manual-dream';
+
+      if (deep) {
+        console.log('Running deep dream cycle (LLM-powered)...');
+        const obs = memory.getContext(undefined, undefined, 50);
+        const stmts = (memory as any).stmts; // access internals for deep consolidation
+        const result = await deepConsolidate(stmts, obs);
+        console.log(`Deep dream complete: ${result.patternsCreated} patterns, ${result.identityFacts} identity facts`);
+      } else {
+        memory.initSession(sessionId);
+        const result = memory.endSession();
+        console.log(`Dream cycle complete: ${result.patternsCreated} patterns created, ${result.patternsDecayed} decayed, ${result.patternsPruned} pruned`);
+      }
       break;
     }
 
@@ -86,8 +97,8 @@ Usage:
   engram search <query>   Search across all tiers
   engram patterns [kind]  List consolidated patterns
   engram export           Export Tier 2+3 to markdown
-  engram dream            Trigger manual consolidation`);
+  engram dream [--deep]   Trigger consolidation (--deep uses LLM)`);
   }
-} finally {
-  memory.close();
 }
+
+main().catch(console.error).finally(() => memory.close());
