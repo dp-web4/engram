@@ -200,8 +200,9 @@ export class EngramMemory {
     const lines: string[] = [];
 
     // Tier 2 patterns — INFERRED, only high-confidence (>= 0.6)
+    // Exclude proposed_identity — those need human review before injection
     const patterns = this.getPatterns()
-      .filter((p: any) => p.confidence >= 0.6);
+      .filter((p: any) => p.confidence >= 0.6 && p.kind !== 'proposed_identity');
     if (patterns.length > 0) {
       lines.push('Inferred patterns (heuristic — may not be accurate):');
       for (const p of patterns.slice(0, 3)) {
@@ -247,7 +248,7 @@ export class EngramMemory {
     const results = this.search(query, limit * 2) // overfetch, then filter
       .filter(r =>
         (r.tier === 1 && (r.salience || 0) >= 0.5) ||
-        (r.tier === 2 && (r.confidence || 0) >= 0.6)
+        (r.tier === 2 && (r.confidence || 0) >= 0.6 && r.kind !== 'proposed_identity')
       )
       .slice(0, limit);
     if (results.length === 0) return '';
