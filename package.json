@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Salience-gated memory for Claude Code — captures what matters, forgets what doesn't, consolidates patterns while sleeping",
   "type": "module",
   "main": "dist/src/server.js",

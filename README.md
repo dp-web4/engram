@@ -6,7 +6,9 @@ Captures what matters, forgets what doesn't, consolidates patterns while sleepin
 
 ## What it does
 
-Every tool Claude uses during a session is observed, scored on 5 salience dimensions, and either forgotten (below threshold) or stored (above threshold). At session end, a "dream cycle" extracts recurring patterns from stored observations. Over time, engram builds a structured memory of how you work — what tools you reach for, what errors you hit, what fixes you apply.
+Every tool Claude uses during a session is observed, scored on 5 salience dimensions, and either forgotten (below threshold) or stored (above threshold). At session end, a "dream cycle" extracts patterns from stored observations — either mechanically (heuristic) or semantically (LLM-powered deep dream). Over time, engram builds a structured memory of how you work — what tools you reach for, what errors you hit, what fixes you apply.
+
+Context injection is automatic. engram injects relevant memories at session start, after each prompt (if related memories exist), and after context compaction. You don't need to query it — it surfaces what's relevant without being asked.
 
 ## How it's different from logging everything
 
@@ -27,21 +29,56 @@ Observations scoring below the salience threshold (0.3) stay in the circular buf
 | Tier | Name | Contents | Retention | Storage |
 |------|------|----------|-----------|---------|
 | 0 | Buffer | Last 50 observations, raw | Session only (FIFO) | In-memory |
-| 1 | Observations | Salience-gated experiences | Permanent | SQLite |
-| 2 | Patterns | Consolidated workflows, error-fix chains | Permanent | SQLite |
+| 1 | Observations | Salience-gated experiences (observed) | Decays after 7 days | SQLite |
+| 2 | Patterns | Consolidated workflows, error-fix chains (inferred) | Decays 0.05/day, pruned below 0.1 | SQLite |
 | 3 | Identity | Persistent project facts | Permanent | SQLite |
+
+Injection is epistemically labeled: Tier 1 = "observed (directly recorded)", Tier 2 = "inferred (heuristic — may not be accurate)", Tier 3 = "auto-extracted, verify if unsure". Injection is conservative — biased toward omission. Wrong memory is more damaging than missing memory.
 
 ## Dream cycles
 
-At session end, engram runs a consolidation pass over Tier 1 observations:
+Two modes of consolidation:
+
+### Heuristic dream (always runs at session end, <100ms)
 
 - **Tool sequences**: Recurring workflows (e.g., `Edit → Bash(test) → Edit` = TDD loop)
 - **Error-fix chains**: Error followed by fix on the same file within 5 observations
 - **Concept clusters**: Multiple observations grouped around the same files
 
-Patterns are promoted to Tier 2 with frequency and confidence scores.
+### Deep dream (LLM-powered, opt-in)
+
+Sends session observations to Claude via `claude --print` for semantic pattern extraction:
+
+- **Workflows**: Recurring approaches (not just tool sequences — understands intent)
+- **Error-fix chains**: Problem → solution with semantic understanding
+- **Insights**: Something learned about the codebase
+- **Decisions**: Architectural choices made during the session
+- **Identity facts**: Persistent project knowledge (confidence >= 0.8 auto-promotes to Tier 3)
+
+```bash
+engram dream --deep                # CLI trigger
+ENGRAM_DEEP_DREAM=1                # env var for automatic deep dream at session end
+```
+
+Example: from 8 raw tool observations, deep dream extracted "PostCompact hook re-injects engram context after compaction" (confidence 0.75) and "engram uses per-directory SQLite isolation" (confidence 0.70). The heuristic dream would have found "Edit appeared 3 times."
+
+### Confidence decay
+
+Memories are not permanent. Patterns lose 0.05 confidence per day since last seen. Observations lose salience after 7 days. Patterns below 0.1 confidence are pruned. A memory system that only accumulates is a distortion engine — engram forgets.
+
+## Context injection (automatic)
+
+| Hook | When | What |
+|------|------|------|
+| **SessionStart** | Session begins | Inject briefing: recent patterns, high-salience observations, identity facts |
+| **UserPromptSubmit** | Every user message | Search for related memories, inject if found (most prompts pass silently) |
+| **PostCompact** | After context compaction | Re-inject briefing (replaces what compaction lost) |
+
+All injection is conservative: patterns need confidence >= 0.6, observations need salience >= 0.6, identity needs confidence >= 0.7. Below those thresholds, engram stays silent.
 
 ## Retrieval (MCP tools)
+
+For when you want to dig deeper than automatic injection:
 
 | Tool | Purpose |
 |------|---------|
@@ -64,14 +101,11 @@ Tier 0 and 1 stay local — they're raw and session-specific.
 ## Install
 
 ```bash
-npm install -g engram
-
-# Register MCP server
-claude mcp add -s user engram -- node $(which engram)/../engram/dist/src/server.js
-
-# Register hooks (add to ~/.claude/settings.json)
-# See hooks/ directory for hook configuration
+git clone https://github.com/dp-web4/engram.git
+cd engram && npm install && npm run build && npm link
 ```
+
+Register MCP server and hooks — see [fleet install guide](https://github.com/dp-web4/engram#hooks) or the `hooks/` directory.
 
 ## CLI
 
@@ -80,7 +114,8 @@ engram stats            # Memory health dashboard
 engram search <query>   # Search across all tiers
 engram patterns [kind]  # List consolidated patterns
 engram export           # Export Tier 2+3 to markdown
-engram dream            # Trigger manual consolidation
+engram dream            # Heuristic consolidation
+engram dream --deep     # LLM-powered semantic consolidation
 ```
 
 ## Architecture
@@ -88,16 +123,16 @@ engram dream            # Trigger manual consolidation
 ```
 SessionStart hook
   │
-  └─→ Inject session briefing into Claude's context
-        ├─ Recent patterns (Tier 2)
-        ├─ High-salience observations (Tier 1, salience >= 0.5)
-        └─ Identity facts (Tier 3)
+  └─→ Inject session briefing (conservative, epistemically labeled)
+        ├─ Inferred patterns (Tier 2, confidence >= 0.6)
+        ├─ Recent observations (Tier 1, salience >= 0.6)
+        └─ Project facts (Tier 3, confidence >= 0.7)
 
 UserPromptSubmit hook (every user message)
   │
-  ├─→ Extract keywords from prompt (stop words filtered)
+  ├─→ Extract keywords from prompt
   ├─→ FTS5 search across observations and patterns
-  └─→ If matches found: inject via additionalContext JSON field
+  └─→ If matches found: inject via additionalContext
       (most prompts pass silently — no match = no injection)
 
 PostToolUse hook (every tool invocation)
@@ -105,44 +140,25 @@ PostToolUse hook (every tool invocation)
   ├─→ Summarize input/output (truncate to 300 chars)
   ├─→ Push to Tier 0 circular buffer
   ├─→ SNARC heuristic score (<10ms, no LLM)
-  │     ├─ Surprise:  tool transition frequency
-  │     ├─ Novelty:   seen-set lookup
-  │     ├─ Arousal:   error/warning keywords
-  │     ├─ Reward:    success signals
-  │     └─ Conflict:  result contradicts history
+  │     S — tool transition frequency
+  │     N — seen-set lookup
+  │     A — error/warning keywords
+  │     R — success signals
+  │     C — result contradicts history
   ├─→ salience >= 0.3? → INSERT Tier 1 (SQLite)
-  └─→ stdout: {"continue": true, "suppressOutput": true}
+  └─→ Silent pass-through (never blocks Claude Code)
 
-PostCompact hook (after context compaction)
+PostCompact hook
   │
-  └─→ Re-inject session briefing (patterns, observations, identity)
-      so Claude doesn't lose awareness after compaction
+  └─→ Re-inject briefing after context compaction
 
 Stop hook (dream cycle)
   │
-  ├─→ Tool sequence extraction → Tier 2
-  ├─→ Error-fix chain detection → Tier 2
-  └─→ Concept clustering → Tier 2
-
-MCP Server (explicit retrieval, when you want to dig deeper)
-  │
-  ├─→ engram_search:   FTS5 across Tier 1+2
-  ├─→ engram_context:  temporal window query
-  ├─→ engram_patterns: Tier 2 retrieval
-  └─→ engram_stats:    memory health
+  ├─→ Confidence decay (patterns -0.05/day, observations after 7 days)
+  ├─→ Prune patterns below 0.1 confidence
+  ├─→ Heuristic extraction → Tier 2
+  └─→ [opt-in] Deep dream via claude --print → Tier 2 + Tier 3
 ```
-
-Context injection is automatic — engram surfaces relevant memories without being asked. MCP tools are for when you want to search or explore the memory explicitly.
-
-## Origin
-
-engram is a lightweight spinoff from [SAGE](https://github.com/dp-web4/SAGE) (Situation-Aware Governance Engine) — a cognition kernel for edge AI that runs a continuous consciousness loop with salience-gated memory, metabolic states, and trust dynamics. SAGE's SNARC attention system, multi-tier memory architecture, and sleep consolidation cycles are adapted here into a practical Claude Code plugin.
-
-The observation pipeline draws from [claude-mem](https://github.com/thedotmack/claude-mem)'s auto-capture hooks. The filtering and consolidation draw from SAGE. See [COMPARISON.md](COMPARISON.md) for a detailed side-by-side.
-
-The key insight: capturing everything is noisy. Capturing nothing loses context. Salience scoring finds the middle — capture what your attention system flags as important, consolidate patterns during downtime, forget the rest.
-
-This is how biological memory works. engram applies it to code.
 
 ## Data
 
@@ -155,6 +171,14 @@ Each launch directory gets its own isolated database:
 Same pattern as Claude Code's `-c` flag: project context is scoped to where you launched from. Working on SAGE won't surface 4-life patterns. No cross-project noise.
 
 No external API calls. No telemetry. All local.
+
+## Origin
+
+engram is a lightweight spinoff from [SAGE](https://github.com/dp-web4/SAGE) (Situation-Aware Governance Engine) — a cognition kernel for edge AI that runs a continuous consciousness loop with salience-gated memory, metabolic states, and trust dynamics. SAGE's SNARC attention system, multi-tier memory architecture, and sleep consolidation cycles are adapted here into a practical Claude Code plugin.
+
+The observation pipeline draws from [claude-mem](https://github.com/thedotmack/claude-mem)'s auto-capture hooks. The filtering and consolidation draw from SAGE. See [COMPARISON.md](COMPARISON.md) for a detailed side-by-side.
+
+The key insight: capturing everything is noisy. Capturing nothing loses context. Salience scoring finds the middle — capture what your attention system flags as important, consolidate patterns during downtime, forget the rest.
 
 ## License
 
