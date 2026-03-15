@@ -53,7 +53,7 @@ Sends session observations to Claude via `claude --print` for semantic pattern e
 - **Error-fix chains**: Problem → solution with semantic understanding
 - **Insights**: Something learned about the codebase
 - **Decisions**: Architectural choices made during the session
-- **Identity facts**: Persistent project knowledge (confidence >= 0.8 auto-promotes to Tier 3)
+- **Identity facts**: Persistent project knowledge (quarantined as `proposed_identity` in Tier 2 — requires human confirmation to promote to Tier 3)
 
 ```bash
 engram dream --deep                # CLI trigger
@@ -157,7 +157,7 @@ Stop hook (dream cycle)
   ├─→ Confidence decay (patterns -0.05/day, observations after 7 days)
   ├─→ Prune patterns below 0.1 confidence
   ├─→ Heuristic extraction → Tier 2
-  └─→ [opt-in] Deep dream via claude --print → Tier 2 + Tier 3
+  └─→ [opt-in] Deep dream via claude --print → Tier 2 (identity quarantined)
 ```
 
 ## Data
