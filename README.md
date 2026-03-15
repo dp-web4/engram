@@ -210,6 +210,8 @@ No external API calls. No telemetry. All local.
 
 engram is a lightweight spinoff from [SAGE](https://github.com/dp-web4/SAGE) (Situation-Aware Governance Engine) — a cognition kernel for edge AI that runs a continuous consciousness loop with salience-gated memory, metabolic states, and trust dynamics. SAGE's SNARC attention system, multi-tier memory architecture, and sleep consolidation cycles are adapted here into a practical Claude Code plugin.
 
+The SNARC salience scoring concept (Surprise, Novelty, Arousal, Reward, Conflict) originates from Richard Aragon's [Transformer Sidecar](https://github.com/RichardAragon/Transformer-Sidecar-Bolt-On-Persistent-State-Space-Memory) — a selective memory system that only writes when moments are novel, surprising, or rewarded. SAGE adapted this into a neural scorer; engram adapts it further into pure heuristic TypeScript.
+
 The observation pipeline draws from [claude-mem](https://github.com/thedotmack/claude-mem)'s auto-capture hooks. The filtering and consolidation draw from SAGE. See [COMPARISON.md](COMPARISON.md) for a detailed side-by-side.
 
 The key insight: capturing everything is noisy. Capturing nothing loses context. Salience scoring finds the middle — capture what your attention system flags as important, consolidate patterns during downtime, forget the rest.

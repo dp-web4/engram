@@ -133,4 +133,4 @@ engram combines two lineages:
 - [claude-mem](https://github.com/thedotmack/claude-mem)'s auto-capture hooks (the observation pipeline)
 - [SAGE](https://github.com/dp-web4/SAGE)'s salience-gated memory architecture (the filtering, tiering, and consolidation)
 
-The SNARC scoring system (Surprise, Novelty, Arousal, Reward, Conflict) is adapted from SAGE's neural attention mechanism into pure heuristic TypeScript — same dimensions, same weighting, no model required.
+The SNARC scoring concept (Surprise, Novelty, Arousal, Reward, Conflict) originates from Richard Aragon's [Transformer Sidecar](https://github.com/RichardAragon/Transformer-Sidecar-Bolt-On-Persistent-State-Space-Memory) — a selective memory system that only writes when moments are salient. SAGE adapted this into a neural scorer with learnable weights; engram adapts it further into pure heuristic TypeScript — same dimensions, no model required.
