@@ -31,7 +31,7 @@ Observations scoring below the salience threshold (0.3) stay in the circular buf
 | 0 | Buffer | Last 50 observations, raw | Session only (FIFO) | In-memory |
 | 1 | Observations | Salience-gated experiences (observed) | Decays after 7 days | SQLite |
 | 2 | Patterns | Consolidated workflows, error-fix chains (inferred) | Decays 0.05/day, pruned below 0.1 | SQLite |
-| 3 | Identity | Persistent project facts | Permanent | SQLite |
+| 3 | Identity | Persistent project facts (human-confirmed) | Permanent | SQLite |
 
 Injection is epistemically labeled: Tier 1 = "observed (directly recorded)", Tier 2 = "inferred (heuristic — may not be accurate)", Tier 3 = "auto-extracted, verify if unsure". Injection is conservative — biased toward omission. Wrong memory is more damaging than missing memory.
 
@@ -53,7 +53,7 @@ Sends session observations to Claude via `claude --print` for semantic pattern e
 - **Error-fix chains**: Problem → solution with semantic understanding
 - **Insights**: Something learned about the codebase
 - **Decisions**: Architectural choices made during the session
-- **Identity facts**: Persistent project knowledge (quarantined as `proposed_identity` in Tier 2 — requires human confirmation to promote to Tier 3)
+- **Identity facts**: Persistent project knowledge (quarantined by default — see below)
 
 ```bash
 engram dream --deep                # CLI trigger
@@ -61,6 +61,27 @@ ENGRAM_DEEP_DREAM=1                # env var for automatic deep dream at session
 ```
 
 Example: from 8 raw tool observations, deep dream extracted "PostCompact hook re-injects engram context after compaction" (confidence 0.75) and "engram uses per-directory SQLite isolation" (confidence 0.70). The heuristic dream would have found "Edit appeared 3 times."
+
+### Identity quarantine
+
+Deep dream identity facts are **quarantined by default**. They go to Tier 2 as `proposed_identity` patterns — never auto-injected into Claude's context, never promoted to Tier 3 without review.
+
+```bash
+engram review                           # see quarantined proposals
+engram promote 42 "test_framework" "Jest"  # human confirms → Tier 3
+engram reject 43                        # delete bad proposal
+```
+
+Unreviewed proposals decay and auto-prune after ~12 days.
+
+For those who prefer speed over safety:
+
+```bash
+engram config auto_promote_identity 1   # deep dream identity → straight to Tier 3
+engram config auto_promote_identity 0   # back to quarantine (default)
+```
+
+This is per-project — you can auto-promote for personal repos and keep quarantine on shared ones. The setting persists across sessions in the project's SQLite database.
 
 ### Confidence decay
 
@@ -74,7 +95,7 @@ Memories are not permanent. Patterns lose 0.05 confidence per day since last see
 | **UserPromptSubmit** | Every user message | Search for related memories, inject if found (most prompts pass silently) |
 | **PostCompact** | After context compaction | Re-inject briefing (replaces what compaction lost) |
 
-All injection is conservative: patterns need confidence >= 0.6, observations need salience >= 0.6, identity needs confidence >= 0.7. Below those thresholds, engram stays silent.
+All injection is conservative: patterns need confidence >= 0.6, observations need salience >= 0.6, identity needs confidence >= 0.7. Quarantined proposals are never injected. Below those thresholds, engram stays silent.
 
 ## Retrieval (MCP tools)
 
@@ -105,17 +126,26 @@ git clone https://github.com/dp-web4/engram.git
 cd engram && npm install && npm run build && npm link
 ```
 
-Register MCP server and hooks — see [fleet install guide](https://github.com/dp-web4/engram#hooks) or the `hooks/` directory.
+Register MCP server:
+```bash
+claude mcp add -s user engram -- node /path/to/engram/dist/src/server.js
+```
+
+Register hooks in `~/.claude/settings.json` — see the [fleet install guide](https://github.com/dp-web4/private-context/blob/main/machines/engram-fleet-install.md) or the `hooks/` directory for the full configuration.
 
 ## CLI
 
 ```bash
-engram stats            # Memory health dashboard
-engram search <query>   # Search across all tiers
-engram patterns [kind]  # List consolidated patterns
-engram export           # Export Tier 2+3 to markdown
-engram dream            # Heuristic consolidation
-engram dream --deep     # LLM-powered semantic consolidation
+engram stats              # Memory health dashboard
+engram search <query>     # Search across all tiers
+engram patterns [kind]    # List consolidated patterns
+engram export             # Export Tier 2+3 to markdown
+engram dream              # Heuristic consolidation
+engram dream --deep       # LLM-powered semantic consolidation
+engram review             # List quarantined identity proposals
+engram promote <id> k v   # Promote proposal to Tier 3 (human-confirmed)
+engram reject <id>        # Delete a quarantined proposal
+engram config [key] [val] # View/set persistent settings
 ```
 
 ## Architecture
@@ -124,7 +154,7 @@ engram dream --deep     # LLM-powered semantic consolidation
 SessionStart hook
   │
   └─→ Inject session briefing (conservative, epistemically labeled)
-        ├─ Inferred patterns (Tier 2, confidence >= 0.6)
+        ├─ Inferred patterns (Tier 2, confidence >= 0.6, excludes proposals)
         ├─ Recent observations (Tier 1, salience >= 0.6)
         └─ Project facts (Tier 3, confidence >= 0.7)
 
@@ -157,18 +187,21 @@ Stop hook (dream cycle)
   ├─→ Confidence decay (patterns -0.05/day, observations after 7 days)
   ├─→ Prune patterns below 0.1 confidence
   ├─→ Heuristic extraction → Tier 2
-  └─→ [opt-in] Deep dream via claude --print → Tier 2 (identity quarantined)
+  └─→ [opt-in] Deep dream via claude --print → Tier 2
+      └─→ Identity facts → quarantine (or Tier 3 if auto_promote_identity=1)
 ```
 
 ## Data
 
 Each launch directory gets its own isolated database:
 ```
-~/.engram/projects/<hash>/engram.db    # observations, patterns, identity
+~/.engram/projects/<hash>/engram.db    # observations, patterns, identity, settings
 ~/.engram/projects/<hash>/meta.json    # maps hash → directory path
 ```
 
 Same pattern as Claude Code's `-c` flag: project context is scoped to where you launched from. Working on SAGE won't surface 4-life patterns. No cross-project noise.
+
+Settings (like `auto_promote_identity`) persist per project in the same database.
 
 No external API calls. No telemetry. All local.
 
