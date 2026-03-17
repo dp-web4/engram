@@ -10,6 +10,8 @@
  */
 
 import { EngramMemory } from '../../src/memory.js';
+import { getDbPath } from '../../src/db.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 
 async function main() {
   let input = '';
@@ -34,7 +36,8 @@ async function main() {
       return;
     }
 
-    const memory = new EngramMemory();
+    const projectRoot = resolveProjectRoot(data.cwd || process.cwd());
+    const memory = new EngramMemory(getDbPath(projectRoot));
     const related = memory.findRelated(searchQuery, 3);
     memory.close();
 

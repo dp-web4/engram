@@ -1,12 +1,17 @@
 /**
- * SNARC Heuristic Scorer
+ * SNARC Heuristic Scorer v2
  *
  * Scores observations on 5 dimensions without any LLM calls:
  *   S — Surprise:  how unexpected was this tool transition?
  *   N — Novelty:   are the files/symbols/concepts new?
- *   A — Arousal:   errors, warnings, state changes?
- *   R — Reward:    did this advance the task?
+ *   A — Arousal:   errors, warnings, state changes, outputs?
+ *   R — Reward:    did this advance the task? (output-aware)
  *   C — Conflict:  does this contradict recent observations?
+ *
+ * v2 philosophy: T1 threshold is very low — the job of T1 is to remember
+ * the conversation. Salience scoring differentiates for T2 promotion and
+ * search ranking, but should NOT gatekeep most observations out of T1.
+ * A memory system that doesn't remember isn't useful.
  *
  * Adapted from SAGE's neural SNARC scorer (sage/services/snarc/)
  * into pure heuristic TypeScript. No model, no embeddings, <10ms per score.
@@ -24,16 +29,21 @@ export interface SNARCScores {
   salience: number;
 }
 
-// Salience weights — emphasize surprise and reward (most actionable)
+// Salience weights — rebalanced for v2
+// Reduced reward weight (was the main flattener), increased arousal
 const WEIGHTS = {
-  surprise: 0.25,
-  novelty: 0.20,
-  arousal: 0.20,
-  reward: 0.25,
+  surprise: 0.20,
+  novelty: 0.25,
+  arousal: 0.25,
+  reward: 0.20,
   conflict: 0.10,
 };
 
-const SALIENCE_THRESHOLD = 0.3;
+// v2: Very low T1 threshold — remember the conversation.
+// Salience still matters for ranking and T2 promotion, but T1 should
+// capture nearly everything. Only truly empty/redundant observations
+// should be dropped.
+const SALIENCE_THRESHOLD = 0.1;
 
 // Error/warning patterns
 const ERROR_PATTERNS = /\b(error|Error|ERROR|FAIL|fail|panic|exception|Exception|EXCEPTION|fatal|Fatal)\b/;
@@ -93,12 +103,11 @@ export class SNARCScorer {
 
   private scoreNovelty(obs: RawObservation): number {
     const tokens = extractTokens(obs.inputSummary);
-    if (tokens.length === 0) return 0;
+    if (tokens.length === 0) return 0.3; // v2: no tokens ≠ no novelty, just unknown
 
     // Batch check which tokens are already seen
     // SQLite IN clause — check up to 20 at a time
     const batch = tokens.slice(0, 20);
-    const placeholders = batch.map(() => '?').join(',');
     const seen = new Set<string>();
 
     try {
@@ -125,16 +134,43 @@ export class SNARCScorer {
   private scoreArousal(obs: RawObservation): number {
     let arousal = 0;
     const output = obs.outputSummary || '';
+    const input = obs.inputSummary || '';
 
+    // v2: Arousal is not just errors — it's "anything happened worth noting"
+
+    // Errors and warnings (high arousal)
     if (obs.exitCode !== undefined && obs.exitCode !== 0) arousal += 0.5;
     if (ERROR_PATTERNS.test(output)) arousal += 0.3;
     if (WARNING_PATTERNS.test(output)) arousal += 0.15;
-    if (STATE_CHANGE_PATTERNS.test(output)) arousal += 0.1;
 
-    // Git operations are inherently high-arousal (they change shared state)
-    if (obs.toolName === 'Bash' && /\bgit\s+(commit|push|merge|rebase)/.test(obs.inputSummary)) {
-      arousal += 0.2;
+    // State changes (moderate arousal)
+    if (STATE_CHANGE_PATTERNS.test(output)) arousal += 0.15;
+
+    // Git operations (shared state changes)
+    if (obs.toolName === 'Bash' && /\bgit\s+(commit|push|merge|rebase|reset|checkout)/.test(input)) {
+      arousal += 0.25;
     }
+
+    // v2: Output-producing operations are inherently arousing
+    // Writing/creating files is an event worth noting
+    if (obs.toolName === 'Write') arousal += 0.4;
+    if (obs.toolName === 'Edit') arousal += 0.3;
+
+    // Bash commands that produce output (not just reads)
+    if (obs.toolName === 'Bash' && output.length > 50) arousal += 0.15;
+
+    // Agent tool use (delegation = significant action)
+    if (obs.toolName === 'Agent') arousal += 0.35;
+
+    // Successful completions with substantial output
+    if (SUCCESS_PATTERNS.test(output)) arousal += 0.1;
+
+    // Large output suggests something meaningful happened
+    if (output.length > 200) arousal += 0.1;
+
+    // v2: Base arousal floor — every tool use is at least a little notable
+    // This prevents the 0.0 arousal that was flattening everything
+    arousal = Math.max(arousal, 0.15);
 
     return Math.min(arousal, 1.0);
   }
@@ -143,22 +179,64 @@ export class SNARCScorer {
     const output = obs.outputSummary || '';
     const input = obs.inputSummary || '';
 
-    // Test passing
-    if (SUCCESS_PATTERNS.test(output) && /test|spec/i.test(input)) return 0.7;
+    // v2: Much more granular reward scoring
+    // The old 0.1 neutral default was the #1 cause of flat salience
 
-    // Build success
-    if (SUCCESS_PATTERNS.test(output) && /build|compile/i.test(input)) return 0.5;
+    // === High reward (0.7-1.0): clear task advancement ===
+
+    // Test passing
+    if (SUCCESS_PATTERNS.test(output) && /test|spec/i.test(input)) return 0.8;
 
     // Git commit (task milestone)
-    if (obs.toolName === 'Bash' && /git\s+commit/.test(input)) return 0.6;
+    if (obs.toolName === 'Bash' && /git\s+commit/.test(input)) return 0.7;
 
-    // File write/edit completed
-    if ((obs.toolName === 'Write' || obs.toolName === 'Edit') && !ERROR_PATTERNS.test(output)) return 0.3;
+    // Git push (shipping work)
+    if (obs.toolName === 'Bash' && /git\s+push/.test(input)) return 0.75;
 
-    // Errors are negative reward
-    if (ERROR_PATTERNS.test(output)) return 0.0;
+    // === Medium-high reward (0.5-0.7): productive output ===
 
-    return 0.1; // neutral
+    // Writing a new file (creation is significant)
+    if (obs.toolName === 'Write' && !ERROR_PATTERNS.test(output)) {
+      // Larger files = more reward (rough proxy for significance)
+      const contentLen = input.length;
+      if (contentLen > 5000) return 0.7;
+      if (contentLen > 1000) return 0.6;
+      return 0.5;
+    }
+
+    // Build success
+    if (SUCCESS_PATTERNS.test(output) && /build|compile/i.test(input)) return 0.6;
+
+    // === Medium reward (0.3-0.5): useful work ===
+
+    // Editing existing file
+    if (obs.toolName === 'Edit' && !ERROR_PATTERNS.test(output)) return 0.45;
+
+    // Agent delegation (orchestrating work)
+    if (obs.toolName === 'Agent') return 0.5;
+
+    // Bash with substantial output (something happened)
+    if (obs.toolName === 'Bash' && !ERROR_PATTERNS.test(output) && output.length > 100) return 0.4;
+
+    // Install/setup operations
+    if (/install|setup|init|create/i.test(input)) return 0.4;
+
+    // === Low-medium reward (0.2-0.3): information gathering ===
+
+    // Reading files (research/understanding)
+    if (obs.toolName === 'Read') return 0.25;
+
+    // Search operations (grep, glob)
+    if (obs.toolName === 'Grep' || obs.toolName === 'Glob') return 0.2;
+
+    // Bash reads/queries
+    if (obs.toolName === 'Bash' && /\b(ls|cat|head|tail|find|grep|which|echo)\b/.test(input)) return 0.2;
+
+    // === Negative reward ===
+    if (ERROR_PATTERNS.test(output)) return 0.05; // v2: not zero — errors are still worth remembering
+
+    // v2: Default is 0.25 (was 0.1) — neutral operations still have some value
+    return 0.25;
   }
 
   private scoreConflict(obs: RawObservation): number {
@@ -201,6 +279,17 @@ function extractTokens(input: string): string[] {
   // Error codes
   const errors = input.match(/[A-Z][A-Z0-9_]{3,}/g);
   if (errors) errors.forEach(e => tokens.add(e));
+
+  // v2: Also extract meaningful words from the input (function names, identifiers)
+  const identifiers = input.match(/\b[a-zA-Z_]\w{4,30}\b/g);
+  if (identifiers) {
+    // Skip common stop-words
+    const stop = new Set(['false', 'true', 'null', 'undefined', 'const', 'function', 'return', 'import', 'export', 'string', 'number', 'boolean']);
+    identifiers
+      .filter(id => !stop.has(id.toLowerCase()))
+      .slice(0, 10)
+      .forEach(id => tokens.add(id));
+  }
 
   return [...tokens].slice(0, 20); // cap at 20
 }

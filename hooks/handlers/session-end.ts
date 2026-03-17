@@ -5,6 +5,8 @@
  */
 
 import { EngramMemory } from '../../src/memory.js';
+import { getDbPath } from '../../src/db.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 import { deepConsolidate } from '../../src/deep-consolidation.js';
 
 async function main() {
@@ -16,8 +18,9 @@ async function main() {
   try {
     const data = JSON.parse(input || '{}');
     const sessionId = data.session_id || process.env.SESSION_ID || 'unknown';
+    const projectRoot = resolveProjectRoot(data.cwd || process.cwd());
 
-    const memory = new EngramMemory();
+    const memory = new EngramMemory(getDbPath(projectRoot));
     memory.initSession(sessionId);
 
     // Heuristic consolidation (always runs)

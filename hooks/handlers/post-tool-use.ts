@@ -5,6 +5,8 @@
  */
 
 import { EngramMemory } from '../../src/memory.js';
+import { getDbPath } from '../../src/db.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 
 async function main() {
   // Read hook input from stdin
@@ -25,8 +27,11 @@ async function main() {
     const cwd = data.cwd || process.cwd();
     const sessionId = data.session_id || process.env.SESSION_ID || 'unknown';
 
-    const memory = new EngramMemory();
-    memory.initSession(sessionId, cwd);
+    // Resolve project root — don't let subdirectory cwd split the DB
+    const projectRoot = resolveProjectRoot(cwd);
+
+    const memory = new EngramMemory(getDbPath(projectRoot));
+    memory.initSession(sessionId, projectRoot);
     memory.capture(toolName, toolInput, toolOutput, cwd);
     memory.close();
   } catch (e) {

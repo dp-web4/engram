@@ -12,8 +12,48 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { EngramMemory } from './memory.js';
+import { getDbPath } from './db.js';
 
-const memory = new EngramMemory();
+// Determine project directory for DB path:
+// 1. ENGRAM_PROJECT_DIR env var (explicit override)
+// 2. CLI arg: node server.js /path/to/project
+// 3. Fallback: scan ~/.engram/projects/ for most recently modified DB
+//
+// The hooks write to a DB keyed by the project cwd they receive from
+// Claude Code. The MCP server must read the same DB.
+function resolveProjectDb(): string {
+  // Explicit env var
+  if (process.env.ENGRAM_PROJECT_DIR) {
+    return getDbPath(process.env.ENGRAM_PROJECT_DIR);
+  }
+  // CLI arg
+  if (process.argv[2]) {
+    return getDbPath(process.argv[2]);
+  }
+  // Scan for most recently modified DB (most likely the active project)
+  try {
+    const { readdirSync, statSync } = require('node:fs');
+    const { join } = require('node:path');
+    const { homedir } = require('node:os');
+    const projectsDir = join(homedir(), '.engram', 'projects');
+    const entries = readdirSync(projectsDir);
+    let newest = { path: '', mtime: 0 };
+    for (const entry of entries) {
+      const dbPath = join(projectsDir, entry, 'engram.db');
+      try {
+        const stat = statSync(dbPath);
+        if (stat.mtimeMs > newest.mtime) {
+          newest = { path: dbPath, mtime: stat.mtimeMs };
+        }
+      } catch { /* no db in this dir */ }
+    }
+    if (newest.path) return newest.path;
+  } catch { /* scan failed */ }
+  // Final fallback: cwd-based
+  return getDbPath();
+}
+
+const memory = new EngramMemory(resolveProjectDb());
 
 const server = new Server(
   { name: 'engram', version: '0.1.0' },

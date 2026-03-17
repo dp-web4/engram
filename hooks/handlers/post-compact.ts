@@ -12,6 +12,8 @@
  */
 
 import { EngramMemory } from '../../src/memory.js';
+import { getDbPath } from '../../src/db.js';
+import { resolveProjectRoot } from '../lib/project-root.js';
 
 async function main() {
   let input = '';
@@ -22,8 +24,9 @@ async function main() {
   try {
     const data = JSON.parse(input || '{}');
     const sessionId = data.session_id || process.env.SESSION_ID || 'compact';
+    const projectRoot = resolveProjectRoot(data.cwd || process.cwd());
 
-    const memory = new EngramMemory();
+    const memory = new EngramMemory(getDbPath(projectRoot));
     memory.initSession(sessionId);
 
     // Run heuristic dream cycle — consolidate what we've seen so far

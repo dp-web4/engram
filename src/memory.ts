@@ -210,9 +210,9 @@ export class EngramMemory {
       }
     }
 
-    // Tier 1 observations — OBSERVED, only high-salience (>= 0.6)
-    const recent = this.stmts.getRecentObservations.all(10) as any[];
-    const highSalience = recent.filter((o: any) => o.salience >= 0.6);
+    // Tier 1 observations — OBSERVED, above median salience (>= 0.35)
+    const recent = this.stmts.getRecentObservations.all(20) as any[];
+    const highSalience = recent.filter((o: any) => o.salience >= 0.35);
     if (highSalience.length > 0) {
       lines.push('Recent observations (directly recorded):');
       for (const o of highSalience.slice(0, 3)) {
@@ -241,14 +241,14 @@ export class EngramMemory {
 
   /**
    * Find observations related to a query, for reactive injection.
-   * Conservative: only surfaces results with salience >= 0.5 (Tier 1)
-   * or confidence >= 0.6 (Tier 2). Labels provenance explicitly.
+   * v2: More permissive — surfaces results with salience >= 0.3 (Tier 1)
+   * or confidence >= 0.5 (Tier 2). Labels provenance explicitly.
    */
   findRelated(query: string, limit = 3): string {
     const results = this.search(query, limit * 2) // overfetch, then filter
       .filter(r =>
-        (r.tier === 1 && (r.salience || 0) >= 0.5) ||
-        (r.tier === 2 && (r.confidence || 0) >= 0.6 && r.kind !== 'proposed_identity')
+        (r.tier === 1 && (r.salience || 0) >= 0.3) ||
+        (r.tier === 2 && (r.confidence || 0) >= 0.5 && r.kind !== 'proposed_identity')
       )
       .slice(0, limit);
     if (results.length === 0) return '';
