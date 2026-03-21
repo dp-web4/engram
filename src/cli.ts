@@ -77,12 +77,15 @@ async function main() {
 
       if (!key) {
         // Show all settings
-        const autoPromote = memory.getSetting('auto_promote_identity') || '0';
+        const autoPromoteDb = memory.getSetting('auto_promote_identity') || '0';
+        const autoPromoteEnv = process.env.SNARC_AUTO_PROMOTE === '1';
+        const autoPromoteEffective = autoPromoteDb === '1' || autoPromoteEnv;
         console.log('=== SNARC Settings ===');
-        console.log(`auto_promote_identity: ${autoPromote === '1' ? 'ON (dangerous)' : 'OFF (default, quarantine)'}`);
-        console.log('\nUsage: engram config <key> <value>');
-        console.log('  snarc config auto_promote_identity 1   # live dangerously');
+        console.log(`auto_promote_identity: ${autoPromoteEffective ? 'ON (dangerous)' : 'OFF (default, quarantine)'}${autoPromoteEnv ? ' [via SNARC_AUTO_PROMOTE env]' : ''}`);
+        console.log('\nUsage: snarc config <key> <value>');
+        console.log('  snarc config auto_promote_identity 1   # per-project DB setting');
         console.log('  snarc config auto_promote_identity 0   # back to quarantine');
+        console.log('  export SNARC_AUTO_PROMOTE=1             # env var (all projects)');
         break;
       }
 
@@ -150,7 +153,8 @@ async function main() {
       const sessionId = args.find(a => !a.startsWith('-')) || 'manual-dream';
 
       if (deep) {
-        const autoPromote = memory.getSetting('auto_promote_identity') === '1';
+        const autoPromote = memory.getSetting('auto_promote_identity') === '1'
+          || process.env.SNARC_AUTO_PROMOTE === '1';
         console.log(`Running deep dream cycle (LLM-powered)${autoPromote ? ' [auto-promote ON]' : ''}...`);
         const obs = memory.getContext(undefined, undefined, 50);
         const stmts = (memory as any).stmts;

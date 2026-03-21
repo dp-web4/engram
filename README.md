@@ -76,8 +76,9 @@ snarc reject 43                          # delete bad proposal
 For those who prefer speed over safety:
 
 ```bash
-snarc config auto_promote_identity 1     # deep dream identity → straight to Tier 3
+snarc config auto_promote_identity 1     # per-project: deep dream identity → straight to Tier 3
 snarc config auto_promote_identity 0     # back to quarantine (default)
+export SNARC_AUTO_PROMOTE=1              # env var: all projects, same effect
 ```
 
 ### Confidence decay
