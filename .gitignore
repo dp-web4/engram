@@ -3,3 +3,5 @@ dist/
 *.db
 *.db-journal
 .engram/
+.gitnexus
+.claude/skills/gitnexus/
