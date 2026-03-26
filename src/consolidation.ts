@@ -67,9 +67,9 @@ function extractToolSequences(stmts: Statements, obs: Observation[]): number {
   let created = 0;
   for (const [seq, entry] of sequences) {
     if (entry.count >= 2) {
-      stmts.insertPattern.run(
+      stmts.upsertPattern.run(
         'tool_sequence',
-        `Recurring workflow: ${seq} (${entry.count}× in session)`,
+        `Recurring workflow: ${seq}`,
         JSON.stringify({ sequence: seq.split(' → '), count: entry.count }),
         entry.count,
         JSON.stringify([...new Set(entry.ids)]),
@@ -98,7 +98,7 @@ function extractErrorFixChains(stmts: Statements, obs: Observation[]): number {
         const errorSig = extractErrorSignature(current.output_summary);
         const fixApproach = candidate.input_summary.slice(0, 200);
 
-        stmts.insertPattern.run(
+        stmts.upsertPattern.run(
           'error_fix',
           `Error: ${errorSig} → Fix: ${fixApproach}`,
           JSON.stringify({
@@ -138,9 +138,9 @@ function extractConceptClusters(stmts: Statements, obs: Observation[]): number {
   let created = 0;
   for (const [file, ids] of fileToObs) {
     if (ids.length >= 3) {
-      stmts.insertPattern.run(
+      stmts.upsertPattern.run(
         'concept_cluster',
-        `Focused work on ${file} (${ids.length} observations)`,
+        `Focused work on ${file}`,
         JSON.stringify({ file, observation_count: ids.length }),
         ids.length,
         JSON.stringify([...new Set(ids)]),

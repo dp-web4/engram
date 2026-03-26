@@ -145,7 +145,7 @@ export async function deepConsolidate(
         autoPromoted++;
       } else {
         // DEFAULT: quarantine as proposed_identity in Tier 2
-        stmts.insertPattern.run(
+        stmts.upsertPattern.run(
           'proposed_identity',
           `[proposed] ${p.summary}`,
           p.detail || '',
@@ -156,7 +156,7 @@ export async function deepConsolidate(
         proposedIdentity++;
       }
     } else {
-      stmts.insertPattern.run(
+      stmts.upsertPattern.run(
         `deep_${p.kind}`,
         p.summary,
         p.detail || '',

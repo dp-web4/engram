@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS patterns (
   frequency   INTEGER DEFAULT 1,
   source_ids  TEXT,
   confidence  REAL DEFAULT 0.5,
-  last_seen   TEXT NOT NULL DEFAULT (datetime('now'))
+  last_seen   TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(kind, summary)
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS patterns_fts USING fts5(
@@ -96,6 +97,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS patterns_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS pat_ai AFTER INSERT ON patterns BEGIN
   INSERT INTO patterns_fts(rowid, summary, detail)
   VALUES (new.id, new.summary, new.detail);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pat_au AFTER UPDATE ON patterns BEGIN
+  INSERT INTO patterns_fts(patterns_fts, rowid, summary, detail)
+  VALUES ('delete', old.id, old.summary, old.detail);
+  INSERT INTO patterns_fts(rowid, summary, detail)
+  VALUES (new.id, new.summary, new.detail);
+END;
+
+CREATE TRIGGER IF NOT EXISTS pat_ad AFTER DELETE ON patterns BEGIN
+  INSERT INTO patterns_fts(patterns_fts, rowid, summary, detail)
+  VALUES ('delete', old.id, old.summary, old.detail);
 END;
 
 -- Tier 3: Identity (persistent project facts)
@@ -152,6 +165,21 @@ export function openDatabase(path?: string): Database.Database {
     db.exec(`ALTER TABLE patterns ADD COLUMN last_seen TEXT NOT NULL DEFAULT (datetime('now'))`);
   } catch { /* column already exists */ }
 
+  // Migration: deduplicate existing patterns and add UNIQUE constraint
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_patterns_dedup ON patterns(kind, summary)`);
+  } catch {
+    // Index creation fails if duplicates exist — deduplicate first
+    db.exec(`
+      DELETE FROM patterns WHERE id NOT IN (
+        SELECT MIN(id) FROM patterns GROUP BY kind, summary
+      )
+    `);
+    // Rebuild FTS to match
+    db.exec(`INSERT INTO patterns_fts(patterns_fts) VALUES('rebuild')`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_patterns_dedup ON patterns(kind, summary)`);
+  }
+
   return db;
 }
 
@@ -165,9 +193,17 @@ export function prepareStatements(db: Database.Database) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
 
-    insertPattern: db.prepare(`
+    upsertPattern: db.prepare(`
       INSERT INTO patterns (kind, summary, detail, frequency, source_ids, confidence)
       VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind, summary) DO UPDATE SET
+        frequency   = patterns.frequency + excluded.frequency,
+        source_ids  = excluded.source_ids,
+        confidence  = MAX(patterns.confidence, excluded.confidence),
+        detail      = CASE WHEN length(excluded.detail) > length(COALESCE(patterns.detail, ''))
+                        THEN excluded.detail ELSE patterns.detail END,
+        last_seen   = datetime('now'),
+        updated_at  = datetime('now')
     `),
 
     upsertIdentity: db.prepare(`
@@ -250,11 +286,13 @@ export function prepareStatements(db: Database.Database) {
       WHERE session_id = ?
     `),
 
-    // Confidence decay: reduce confidence of patterns not seen recently
-    // Called during dream cycle. Decay rate: 0.05 per day since last_seen.
+    // Confidence decay: reduce confidence of patterns not seen recently.
+    // Decay rate is dampened by frequency — high-frequency patterns are stickier.
+    // Base rate 0.05/day, divided by log2(frequency+1) so:
+    //   freq 1 → 0.05/day, freq 3 → 0.025/day, freq 15 → 0.0125/day
     decayPatterns: db.prepare(`
       UPDATE patterns SET
-        confidence = MAX(0.0, confidence - 0.05 * (julianday('now') - julianday(last_seen)))
+        confidence = MAX(0.0, confidence - (0.05 / (1.0 + ln(frequency + 1) / ln(2))) * (julianday('now') - julianday(last_seen)))
       WHERE julianday('now') - julianday(last_seen) > 1.0
     `),
 
