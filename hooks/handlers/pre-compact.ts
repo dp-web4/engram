@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { EngramMemory } from '../../src/memory.js';
 import { getDbPath } from '../../src/db.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
+import { membotStore } from '../../src/membot-bridge.js';
 
 // Patterns indicating semantic content worth preserving
 const INSIGHT_PATTERNS = /\b(principle|insight|reali[zs]e|discover|the key|fundamental|axiom|breakthrough|novel|reframe|connection between|maps to|implies|therefore|this means|the real)\b/i;
@@ -181,6 +182,11 @@ async function main() {
           '', // no "output" for conversation turns
           data.cwd || process.cwd(),
         );
+
+        // EXPERIMENT: dual-write to membot for embedding-based retrieval
+        // Fire-and-forget — don't block on membot availability
+        membotStore(taggedSummary, 'conversation').catch(() => {});
+
         captured++;
       }
     }

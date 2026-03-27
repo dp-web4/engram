@@ -8,6 +8,7 @@ import { EngramMemory } from '../../src/memory.js';
 import { getDbPath } from '../../src/db.js';
 import { resolveProjectRoot } from '../lib/project-root.js';
 import { deepConsolidate } from '../../src/deep-consolidation.js';
+import { membotStore, membotSave } from '../../src/membot-bridge.js';
 
 async function main() {
   let input = '';
@@ -42,6 +43,24 @@ async function main() {
         if (deep.proposedIdentity > 0) parts.push(`${deep.proposedIdentity} proposed identity (quarantined)`);
         if (deep.autoPromoted > 0) parts.push(`${deep.autoPromoted} identity auto-promoted`);
       }
+    }
+
+    // EXPERIMENT: dual-write deep dream patterns to membot
+    // Store extracted patterns in embedding space for semantic retrieval
+    const patterns = memory.getPatterns();
+    let membotStored = 0;
+    for (const p of patterns.slice(-10)) { // last 10 patterns from this session
+      if (p.confidence >= 0.5) {
+        const stored = await membotStore(
+          `[${p.kind}] ${p.summary}`,
+          `pattern,${p.kind},conf:${p.confidence.toFixed(2)}`
+        ).catch(() => false);
+        if (stored) membotStored++;
+      }
+    }
+    if (membotStored > 0) {
+      parts.push(`${membotStored} membot-stored`);
+      await membotSave().catch(() => {}); // persist cartridge
     }
 
     memory.close();
