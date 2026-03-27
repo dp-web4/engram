@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { hostname } from 'node:os';
 
-const MEMBOT_URL = process.env.MEMBOT_URL || 'http://localhost:8000';
+const MEMBOT_URL = process.env.MEMBOT_URL || 'http://localhost:8001'; // REST bridge port (not MCP 8000)
 const EXPERIMENT_DIR = join(homedir(), '.snarc', 'membot');
 const EXPERIMENT_LOG = join(EXPERIMENT_DIR, 'experiment_log.jsonl');
 
@@ -57,25 +57,42 @@ function logExperiment(entry: ComparisonEntry): void {
   }
 }
 
+/**
+ * Call membot via its REST bridge (plain HTTP POST, no MCP protocol).
+ * The REST bridge runs on port 8001 alongside the MCP server on 8000.
+ * Endpoints: /store, /search, /mount, /save, /status
+ */
 async function callMembot(tool: string, args: Record<string, any>): Promise<string | null> {
+  // Map MCP tool names to REST endpoints
+  const endpointMap: Record<string, string> = {
+    memory_store: '/store',
+    memory_search: '/search',
+    mount_cartridge: '/mount',
+    save_cartridge: '/save',
+    get_status: '/status',
+  };
+
+  const endpoint = endpointMap[tool];
+  if (!endpoint) return null;
+
   try {
-    const resp = await fetch(`${MEMBOT_URL}/mcp/v1/tools/call`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: tool, arguments: args }),
-      signal: AbortSignal.timeout(5000),
-    });
+    const method = endpoint === '/status' ? 'GET' : 'POST';
+    const opts: RequestInit = {
+      method,
+      signal: AbortSignal.timeout(10000),
+    };
 
-    if (!resp.ok) return null;
-    const data = await resp.json() as any;
-
-    // FastMCP response format
-    if (data?.content) {
-      for (const item of data.content) {
-        if (item.type === 'text') return item.text;
-      }
+    if (method === 'POST') {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(args);
     }
-    return JSON.stringify(data);
+
+    const resp = await fetch(`${MEMBOT_URL}${endpoint}`, opts);
+    if (!resp.ok) return null;
+
+    const data = await resp.json() as any;
+    // REST bridge returns {ok, msg, raw}
+    return data.msg || data.raw || JSON.stringify(data);
   } catch {
     return null; // membot not available — silent fallback
   }
