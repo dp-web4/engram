@@ -21,7 +21,9 @@
 set -e
 
 # Find base directory
-if [ -d "/mnt/c/exe/projects/ai-agents" ]; then
+if [ -d "/mnt/c/projects/ai-agents" ]; then
+  BASE="/mnt/c/projects/ai-agents"
+elif [ -d "/mnt/c/exe/projects/ai-agents" ]; then
   BASE="/mnt/c/exe/projects/ai-agents"
 elif [ -d "$HOME/ai-workspace" ]; then
   BASE="$HOME/ai-workspace"
@@ -42,10 +44,16 @@ if [ ! -f "$MEMBOT_DIR/membot_server.py" ]; then
   exit 1
 fi
 
+# Use venv if available
+PYTHON="python3"
+if [ -f "$MEMBOT_DIR/.venv/bin/python" ]; then
+  PYTHON="$MEMBOT_DIR/.venv/bin/python"
+fi
+
 # Check Python deps
-python3 -c "import fastmcp, numpy, sentence_transformers" 2>/dev/null || {
+$PYTHON -c "import fastmcp, numpy, sentence_transformers" 2>/dev/null || {
   echo "Installing membot dependencies..."
-  pip install -r "$MEMBOT_DIR/requirements.txt"
+  $PYTHON -m pip install -r "$MEMBOT_DIR/requirements.txt"
 }
 
 # Check if already running
@@ -57,7 +65,7 @@ fi
 # Start membot HTTP server (writable, background)
 echo "Starting membot on port $MEMBOT_PORT (writable mode)..."
 cd "$MEMBOT_DIR"
-python3 membot_server.py --transport http --port "$MEMBOT_PORT" --writable &
+$PYTHON membot_server.py --transport http --port "$MEMBOT_PORT" --writable &
 MEMBOT_PID=$!
 
 # Wait for startup
