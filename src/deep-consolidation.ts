@@ -88,9 +88,16 @@ export async function deepConsolidate(
   let response: string;
   try {
     writeFileSync(tmpFile, prompt);
+    // CRITICAL: run from tmpdir() so the inner `claude --print` does NOT inherit
+    // the outer agent's cwd. Without this, the inner Claude loads the outer
+    // agent's project CLAUDE.md + SessionStart hooks (e.g. state-continuity
+    // pointing at the agent's state pin), gets steered toward agent-style
+    // behavior, and returns prose instead of the requested JSON array.
+    // Symptom: "[snarc] Deep consolidation: no JSON array in response".
     response = execSync(
       `cat "${tmpFile}" | claude --print -`,
       {
+        cwd: tmpdir(),
         timeout: 60_000,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
